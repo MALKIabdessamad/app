@@ -1,16 +1,19 @@
+import { siteformer } from "./.siteformer/vite-plugin";
 import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import tsconfigPaths from "vite-tsconfig-paths";
 import { nitro } from "nitro/vite";
 
 export default defineConfig(({ command }) => ({
   server: { host: "0.0.0.0", port: 8080, strictPort: true, allowedHosts: true },
-  resolve: { dedupe: ["react", "react-dom", "@tanstack/react-router"] },
+  resolve: {
+    dedupe: ["react", "react-dom", "@tanstack/react-router"],
+    tsconfigPaths: true,
+  },
   plugins: [
+    siteformer(),
     tailwindcss(),
-    tsconfigPaths({ projects: ["./tsconfig.json"] }),
     tanstackStart({
       server: { entry: "server" },
       importProtection: {
@@ -18,11 +21,19 @@ export default defineConfig(({ command }) => ({
         client: { files: ["**/server/**"], specifiers: ["server-only"] },
       },
     }),
-    ...(command === "build" ? [nitro({
-      preset: "cloudflare-module",
-      output: { dir: "dist", serverDir: "dist/server", publicDir: "dist/client" },
-      cloudflare: { nodeCompat: true, deployConfig: true },
-    })] : []),
+    ...(command === "build"
+      ? [
+          nitro({
+            preset: "cloudflare-module",
+            output: {
+              dir: "dist",
+              serverDir: "dist/server",
+              publicDir: "dist/client",
+            },
+            cloudflare: { nodeCompat: true, deployConfig: true },
+          }),
+        ]
+      : []),
     react(),
   ],
 }));

@@ -26,6 +26,7 @@ npm run dev
 - `npm run build` — production output.
 - `npm run preview` — preview production output after building.
 - `npm test` — run automated tests.
+- `npm run lint` — check code style (ESLint and Prettier).
 
 ## Structure
 
@@ -35,6 +36,7 @@ npm run dev
 - `src/components/ui` — reusable interface controls.
 - `src/start.ts` — request error handling and cross-site request protection.
 - `src/server.ts` — server entry and fallback error responses.
+- `.siteformer/` — editor support for the SiteFormer preview (development only, managed by SiteFormer).
 
 The development configuration uses direct Vite, TanStack Start, React, Tailwind, and Nitro plugins without a proprietary adapter. Production output is written to `dist/client` and `dist/server` for Cloudflare deployment. Platform-managed editor scripts, hosting URLs, and automatically restored project instructions are outside the application source.
 

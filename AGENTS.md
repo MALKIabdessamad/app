@@ -8,3 +8,4 @@
 - Use local assets and neutral route metadata; the starter must not depend on external placeholder images.
 - Keep error boundaries provider-independent and log caught errors to the console; application code should not require proprietary browser telemetry hooks.
 - Do not rewrite published Git history; synchronized collaborators rely on stable history.
+- Keep SiteFormer's editor support: the `.siteformer/` folder and `siteformer()` first in the Vite plugins. It only runs in `vite dev` (never in builds), is managed by SiteFormer, and must not be edited or removed.

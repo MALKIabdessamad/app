@@ -1,0 +1,113 @@
+/* eslint-disable */
+/**
+ * SiteFormer editor support. Development only (`vite dev`): a production build never includes it.
+ *
+ * - Tags each JSX element with where it is written (data-sf-loc="src/routes/index.tsx:20:5"),
+ *   so the editor can point a direct edit or the AI at the exact line.
+ * - Loads the editor bridge (bridge.js) in the browser. It only does anything inside the
+ *   SiteFormer editor's preview frame.
+ *
+ * Managed by SiteFormer: this folder is rewritten automatically. Keep `siteformer()` in vite.config.ts.
+ */
+import { readFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { parseSync, type Plugin } from "vite";
+
+const BRIDGE_ID = "virtual:siteformer-bridge";
+const RESOLVED_BRIDGE_ID = "\0" + BRIDGE_ID;
+/** Elements that can't take attributes. */
+const SKIP = new Set(["Fragment", "React.Fragment"]);
+
+type AstNode = { type: string; start: number; end: number; [key: string]: unknown };
+
+function walk(value: unknown, visit: (node: AstNode) => void): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) walk(item, visit);
+    return;
+  }
+  const node = value as AstNode;
+  if (typeof node.type === "string") visit(node);
+  for (const key of Object.keys(node)) {
+    if (key !== "parent") walk(node[key], visit);
+  }
+}
+
+function nameOf(node: AstNode | undefined): string {
+  if (!node) return "";
+  if (node.type === "JSXIdentifier") return String(node["name"]);
+  if (node.type === "JSXMemberExpression") {
+    return `${nameOf(node["object"] as AstNode)}.${nameOf(node["property"] as AstNode)}`;
+  }
+  return "";
+}
+
+/** 1-based line and column of each offset. */
+function positions(code: string) {
+  const starts = [0];
+  for (let i = 0; i < code.length; i++) if (code.charCodeAt(i) === 10) starts.push(i + 1);
+  return (offset: number) => {
+    let low = 0;
+    let high = starts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if ((starts[mid] ?? 0) <= offset) low = mid;
+      else high = mid - 1;
+    }
+    return { line: low + 1, column: offset - (starts[low] ?? 0) + 1 };
+  };
+}
+
+export function siteformer(): Plugin {
+  let root = process.cwd();
+  return {
+    name: "siteformer",
+    apply: (_config, env) => env.command === "serve" && process.env["VITEST"] === undefined,
+    enforce: "pre",
+    configResolved(config) {
+      root = config.root;
+    },
+    resolveId(id) {
+      return id === BRIDGE_ID ? RESOLVED_BRIDGE_ID : undefined;
+    },
+    load(id) {
+      if (id !== RESOLVED_BRIDGE_ID) return undefined;
+      const file = join(root, ".siteformer", "bridge.js");
+      this.addWatchFile(file);
+      return readFileSync(file, "utf8");
+    },
+    transform(code, id, options) {
+      const file = id.split("?")[0] ?? id;
+      if (!/\.[jt]sx$/.test(file) || file.includes(`${sep}node_modules${sep}`)) return undefined;
+      const rel = relative(root, file).split(sep).join("/");
+      if (rel.startsWith("..")) return undefined;
+      let program: unknown;
+      try {
+        program = parseSync(file, code).program;
+      } catch {
+        return undefined;
+      }
+      const at = positions(code);
+      const inserts: Array<{ offset: number; text: string }> = [];
+      walk(program, (node) => {
+        if (node.type !== "JSXOpeningElement") return;
+        const name = node["name"] as AstNode | undefined;
+        if (!name || SKIP.has(nameOf(name))) return;
+        const { line, column } = at(node.start);
+        inserts.push({ offset: name.end, text: ` data-sf-loc="${rel}:${line}:${column}"` });
+      });
+      const client = this.environment
+        ? this.environment.config.consumer === "client"
+        : !options?.ssr;
+      const loadBridge = client && rel === "src/routes/__root.tsx";
+      if (inserts.length === 0 && !loadBridge) return undefined;
+      let out = code;
+      for (const { offset, text } of inserts.sort((a, b) => b.offset - a.offset)) {
+        out = out.slice(0, offset) + text + out.slice(offset);
+      }
+      // Imports are hoisted, so appending keeps every line number unchanged.
+      if (loadBridge) out += `\nimport "${BRIDGE_ID}";\n`;
+      return { code: out, map: null };
+    },
+  };
+}
