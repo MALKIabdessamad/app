@@ -25,8 +25,7 @@
   var mode = "none"; // none | select | text
   var hovered = null;
   var editing = null; // { el, before, editable }
-  var picks = []; // elements picked for the chat: { n, el, loc, box, badge }
-  var nextPick = 1;
+  var picks = []; // the element picked for the chat (one at a time): { n, el, loc, box, badge }
   var ui = null;
   var frame = 0;
 
@@ -97,9 +96,9 @@
         pick.badge.style.display = "none";
         continue;
       }
-      pick.badge.style.display = "grid";
-      pick.badge.style.left = Math.min(window.innerWidth - 22, Math.max(2, p.right - 10)) + "px";
-      pick.badge.style.top = Math.max(2, p.top - 10) + "px";
+      pick.badge.style.display = "block";
+      pick.badge.style.left = Math.max(0, p.left) + "px";
+      pick.badge.style.top = Math.max(0, p.top - 20) + "px";
     }
   }
 
@@ -141,27 +140,27 @@
 
   // ---------------------------------------------------------------- picks (Select)
 
+  // One element at a time: picking another replaces it.
   function pick(el) {
-    // Picking an element twice doesn't add it twice.
-    for (var i = 0; i < picks.length; i++) if (picks[i].el === el) return;
+    if (picks.length && picks[0].el === el) return;
+    keepPicks([]);
     mountUi();
-    var n = nextPick++;
     var box = document.createElement("div");
     box.style.cssText =
       "position:fixed;display:none;box-sizing:border-box;border-radius:4px;outline:2px solid " +
       BLUE +
       ";outline-offset:1px;";
     var badge = document.createElement("div");
-    badge.textContent = String(n);
+    badge.textContent = el.tagName.toLowerCase();
     badge.style.cssText =
-      "position:fixed;display:none;place-items:center;width:20px;height:20px;border-radius:999px;background:" +
+      "position:fixed;display:none;padding:1px 6px;border-radius:4px;background:" +
       BLUE +
-      ";color:#fff;font:700 11px/1 ui-sans-serif,system-ui,sans-serif;box-shadow:0 0 0 2px #fff,0 2px 6px rgba(0,0,0,.3);";
+      ";color:#fff;font:600 11px/16px ui-sans-serif,system-ui,sans-serif;white-space:nowrap;";
     ui.root.appendChild(box);
     ui.root.appendChild(badge);
-    picks.push({ n: n, el: el, loc: el.getAttribute("data-sf-loc"), box: box, badge: badge });
+    picks.push({ n: 1, el: el, loc: el.getAttribute("data-sf-loc"), box: box, badge: badge });
     redraw();
-    send({ type: "pick", n: n, element: describe(el) });
+    send({ type: "pick", n: 1, element: describe(el) });
   }
 
   function keepPicks(numbers) {
@@ -171,7 +170,6 @@
       p.badge.remove();
       return false;
     });
-    if (!picks.length) nextPick = 1;
     redraw();
   }
 
@@ -208,7 +206,13 @@
       send({ type: "text-cancel" });
       return;
     }
-    send({ type: "text-commit", loc: el.getAttribute("data-sf-loc"), before: before, after: after });
+    send({
+      type: "text-commit",
+      loc: el.getAttribute("data-sf-loc"),
+      tag: el.tagName.toLowerCase(),
+      before: before,
+      after: after,
+    });
   }
 
   // ---------------------------------------------------------------- events in the page
@@ -379,8 +383,6 @@
         break;
       case "picks":
         keepPicks(Array.isArray(data.keep) ? data.keep : []);
-        // Numbering continues after a reload (earlier picks still sit in the chat box).
-        if (typeof data.next === "number" && data.next >= nextPick) nextPick = data.next;
         break;
       case "viewport":
         send({ type: "viewport", scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), path: currentPath() });
