@@ -8,7 +8,13 @@
  * Managed by SiteFormer: this file is rewritten automatically.
  */
 (function () {
-  if (typeof window === "undefined" || window.parent === window || window.__siteformer) return;
+  if (typeof window === "undefined") return;
+  if (window.parent === window) {
+    // The site open in its own tab: live updates were held while the AI worked; show the result.
+    if (import.meta.hot) import.meta.hot.on("siteformer:resync", function () { location.reload(); });
+    return;
+  }
+  if (window.__siteformer) return;
   window.__siteformer = true;
 
   var VERSION = 1;
