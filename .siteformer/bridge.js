@@ -283,13 +283,24 @@
     },
     true,
   );
+  // Leaving the field saves what was typed, a moment later: if the page is going away (the
+  // editor reloads the preview), the edit is dropped instead of saving half-typed text.
+  var leaving = false;
   document.addEventListener(
     "focusout",
     function (e) {
-      if (editing && e.target === editing.el) stopEditing(true);
+      if (!editing || e.target !== editing.el) return;
+      var current = editing;
+      setTimeout(function () {
+        if (!leaving && editing === current) stopEditing(true);
+      }, 0);
     },
     true,
   );
+  window.addEventListener("pagehide", function () {
+    leaving = true;
+    if (editing) stopEditing(false);
+  });
   window.addEventListener("scroll", redraw, true);
   window.addEventListener("resize", redraw);
 
