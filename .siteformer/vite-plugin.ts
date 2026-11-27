@@ -94,7 +94,8 @@ export function siteformer(): Plugin {
         const name = node["name"] as AstNode | undefined;
         if (!name || SKIP.has(nameOf(name))) return;
         const { line, column } = at(node.start);
-        inserts.push({ offset: name.end, text: ` data-sf-loc="${rel}:${line}:${column}"` });
+        // An expression, so no file name character can break (or be decoded in) the attribute.
+        inserts.push({ offset: name.end, text: ` data-sf-loc={${JSON.stringify(`${rel}:${line}:${column}`)}}` });
       });
       const client = this.environment
         ? this.environment.config.consumer === "client"
@@ -105,7 +106,8 @@ export function siteformer(): Plugin {
       for (const { offset, text } of inserts.sort((a, b) => b.offset - a.offset)) {
         out = out.slice(0, offset) + text + out.slice(offset);
       }
-      // Imports are hoisted, so appending keeps every line number unchanged.
+      // Imports are hoisted, so appending keeps every line number unchanged. The insertions
+      // only shift columns within lines, so no source map is needed for useful stack traces.
       if (loadBridge) out += `\nimport "${BRIDGE_ID}";\n`;
       return { code: out, map: null };
     },

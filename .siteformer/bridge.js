@@ -1,8 +1,8 @@
 /* eslint-disable */
 /*
  * SiteFormer editor bridge. Loaded only by the dev server (never in a production build), and only
- * active inside the SiteFormer editor's preview frame: it lets the editor select elements, edit
- * text in place, pin notes, follow the current page and see errors. It only talks to the editor
+ * active inside the SiteFormer editor's preview frame: it lets the editor pick elements for the
+ * chat, edit text in place, follow the current page and see errors. It only talks to the editor
  * with postMessage and never changes files itself.
  *
  * Managed by SiteFormer: this file is rewritten automatically.
@@ -16,12 +16,11 @@
   var editor = window.parent;
   var editorOrigin = null; // learned from the editor's hello
   var outbox = [];
-  var mode = "none"; // none | select | annotate
+  var mode = "none"; // none | select | text
   var hovered = null;
-  var selected = null;
   var editing = null; // { el, before, editable }
-  var pins = []; // { n, el }
-  var nextPin = 1;
+  var picks = []; // elements picked for the chat: { n, el, loc, box, badge }
+  var nextPick = 1;
   var ui = null;
   var frame = 0;
 
@@ -37,73 +36,64 @@
 
   // ---------------------------------------------------------------- overlay (drawn in the page)
 
-  function box(solid) {
-    var el = document.createElement("div");
-    el.style.cssText =
-      "position:fixed;display:none;pointer-events:none;box-sizing:border-box;border-radius:4px;" +
-      (solid
-        ? "outline:2px solid " + BLUE + ";outline-offset:1px;"
-        : "outline:2px dashed " + BLUE + ";outline-offset:1px;background:rgba(59,130,246,.08);");
-    return el;
-  }
-
   function mountUi() {
     if (ui && ui.root.isConnected) return ui;
     var root = document.createElement("div");
     root.setAttribute("data-sf-ui", "");
+    root.setAttribute("aria-hidden", "true");
     root.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
-    var hover = box(false);
+    var hover = document.createElement("div");
+    hover.style.cssText =
+      "position:fixed;display:none;box-sizing:border-box;border-radius:4px;outline:2px dashed " +
+      BLUE +
+      ";outline-offset:1px;background:rgba(59,130,246,.08);";
     var label = document.createElement("div");
     label.style.cssText =
-      "position:fixed;display:none;pointer-events:none;padding:1px 6px;border-radius:4px;background:" +
+      "position:fixed;display:none;padding:1px 6px;border-radius:4px;background:" +
       BLUE +
       ";color:#fff;font:600 11px/16px ui-sans-serif,system-ui,sans-serif;white-space:nowrap;";
-    var picked = box(true);
-    var pinLayer = document.createElement("div");
     root.appendChild(hover);
     root.appendChild(label);
-    root.appendChild(picked);
-    root.appendChild(pinLayer);
     document.documentElement.appendChild(root);
-    ui = { root: root, hover: hover, label: label, picked: picked, pins: pinLayer };
+    ui = { root: root, hover: hover, label: label };
     return ui;
   }
 
-  function place(el, target) {
+  function place(box, target) {
     if (!target || !target.isConnected) {
-      el.style.display = "none";
-      return;
+      box.style.display = "none";
+      return null;
     }
     var r = target.getBoundingClientRect();
-    el.style.display = "block";
-    el.style.left = r.left + "px";
-    el.style.top = r.top + "px";
-    el.style.width = r.width + "px";
-    el.style.height = r.height + "px";
+    box.style.display = "block";
+    box.style.left = r.left + "px";
+    box.style.top = r.top + "px";
+    box.style.width = r.width + "px";
+    box.style.height = r.height + "px";
+    return r;
   }
 
   function draw() {
     frame = 0;
     if (!ui) return;
-    place(ui.hover, mode !== "none" && hovered !== selected ? hovered : null);
-    if (mode !== "none" && hovered && hovered !== selected) {
-      var r = hovered.getBoundingClientRect();
-      ui.label.textContent = hovered.tagName.toLowerCase();
+    var r = place(ui.hover, mode !== "none" ? hovered : null);
+    if (r) {
+      ui.label.textContent = mode === "text" ? "Edit text" : hovered.tagName.toLowerCase();
       ui.label.style.display = "block";
       ui.label.style.left = Math.max(0, r.left) + "px";
       ui.label.style.top = Math.max(0, r.top - 20) + "px";
     } else ui.label.style.display = "none";
-    place(ui.picked, selected);
-    for (var i = 0; i < pins.length; i++) {
-      var pin = pins[i];
-      if (!pin.el.isConnected) {
-        pin.dot.style.display = "none";
+    for (var i = 0; i < picks.length; i++) {
+      var pick = picks[i];
+      if (!pick.el.isConnected) pick.el = byLoc(pick.loc) || pick.el; // re-rendered by a hot update
+      var p = place(pick.box, pick.el);
+      if (!p) {
+        pick.badge.style.display = "none";
         continue;
       }
-      var p = pin.el.getBoundingClientRect();
-      pin.dot.style.display = "grid";
-      pin.dot.style.left = Math.min(window.innerWidth - 22, Math.max(2, p.right - 10)) + "px";
-      pin.dot.style.top = Math.max(2, p.top - 10) + "px";
+      pick.badge.style.display = "grid";
+      pick.badge.style.left = Math.min(window.innerWidth - 22, Math.max(2, p.right - 10)) + "px";
+      pick.badge.style.top = Math.max(2, p.top - 10) + "px";
     }
   }
 
@@ -113,15 +103,14 @@
 
   // ---------------------------------------------------------------- elements
 
+  function byLoc(loc) {
+    return loc ? document.querySelector('[data-sf-loc="' + CSS.escape(loc) + '"]') : null;
+  }
+
   function tagged(node) {
     var el = node && node.nodeType === 1 ? node : node && node.parentElement;
     if (!el || (ui && ui.root.contains(el))) return null;
     return el.closest("[data-sf-loc]");
-  }
-
-  function rectOf(el) {
-    var r = el.getBoundingClientRect();
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
   }
 
   // One plain text child: the case a direct edit can save (and React updates safely afterwards).
@@ -129,92 +118,64 @@
     return el.childNodes.length === 1 && el.firstChild.nodeType === 3 && el.textContent.trim().length > 0;
   }
 
+  // The element a click in the current mode is about (text mode: only text it can edit).
+  function target(node) {
+    var el = tagged(node);
+    return el && mode === "text" && !onlyText(el) ? null : el;
+  }
+
   function describe(el) {
-    var cs = getComputedStyle(el);
     return {
       loc: el.getAttribute("data-sf-loc"),
       tag: el.tagName.toLowerCase(),
       text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 300),
-      textEditable: onlyText(el),
-      image: el.tagName === "IMG" ? el.getAttribute("src") || "" : null,
-      classes: (el.getAttribute("class") || "").slice(0, 2000),
       path: currentPath(),
-      rect: rectOf(el),
-      style: {
-        color: cs.color,
-        backgroundColor: cs.backgroundColor,
-        fontSize: cs.fontSize,
-        fontWeight: cs.fontWeight,
-        textAlign: cs.textAlign,
-        borderRadius: cs.borderTopLeftRadius,
-      },
     };
   }
 
-  // The site's theme colors, so the editor's swatches show the real ones.
-  var THEME = ["background", "foreground", "primary", "primary-foreground", "muted", "muted-foreground", "accent", "border"];
-  function themeColors() {
-    var cs = getComputedStyle(document.documentElement);
-    var out = {};
-    THEME.forEach(function (name) {
-      var value = cs.getPropertyValue("--" + name).trim();
-      if (value) out[name] = value;
-    });
-    return out;
-  }
+  // ---------------------------------------------------------------- picks (Select)
 
-  function sameLoc(el) {
-    var loc = el.getAttribute("data-sf-loc");
-    return Array.prototype.slice.call(document.querySelectorAll('[data-sf-loc="' + CSS.escape(loc) + '"]'));
-  }
-
-  function select(el) {
-    selected = el;
+  function pick(el) {
+    // Picking an element twice doesn't add it twice.
+    for (var i = 0; i < picks.length; i++) if (picks[i].el === el) return;
     mountUi();
-    redraw();
-    send({ type: "select", element: describe(el) });
-  }
-
-  function deselect() {
-    stopEditing(false);
-    if (!selected) return;
-    selected = null;
-    redraw();
-  }
-
-  // ---------------------------------------------------------------- pins
-
-  function addPin(el) {
-    mountUi();
-    var n = nextPin++;
-    var dot = document.createElement("div");
-    dot.textContent = String(n);
-    dot.style.cssText =
-      "position:fixed;display:grid;place-items:center;width:20px;height:20px;border-radius:999px;background:" +
+    var n = nextPick++;
+    var box = document.createElement("div");
+    box.style.cssText =
+      "position:fixed;display:none;box-sizing:border-box;border-radius:4px;outline:2px solid " +
+      BLUE +
+      ";outline-offset:1px;";
+    var badge = document.createElement("div");
+    badge.textContent = String(n);
+    badge.style.cssText =
+      "position:fixed;display:none;place-items:center;width:20px;height:20px;border-radius:999px;background:" +
       BLUE +
       ";color:#fff;font:700 11px/1 ui-sans-serif,system-ui,sans-serif;box-shadow:0 0 0 2px #fff,0 2px 6px rgba(0,0,0,.3);";
-    ui.pins.appendChild(dot);
-    pins.push({ n: n, el: el, dot: dot });
+    ui.root.appendChild(box);
+    ui.root.appendChild(badge);
+    picks.push({ n: n, el: el, loc: el.getAttribute("data-sf-loc"), box: box, badge: badge });
     redraw();
-    send({ type: "pin", n: n, element: describe(el) });
+    send({ type: "pick", n: n, element: describe(el) });
   }
 
-  function keepPins(numbers) {
-    pins = pins.filter(function (pin) {
-      if (numbers.indexOf(pin.n) !== -1) return true;
-      pin.dot.remove();
+  function keepPicks(numbers) {
+    picks = picks.filter(function (p) {
+      if (numbers.indexOf(p.n) !== -1) return true;
+      p.box.remove();
+      p.badge.remove();
       return false;
     });
-    if (!pins.length) nextPin = 1;
+    if (!picks.length) nextPick = 1;
     redraw();
   }
 
   // ---------------------------------------------------------------- text editing in place
 
-  function startEditing() {
-    if (!selected || !onlyText(selected) || editing) return;
-    var el = selected;
+  function startEditing(el) {
+    if (editing || !onlyText(el)) return;
     editing = { el: el, before: el.textContent, editable: el.getAttribute("contenteditable") };
+    hovered = null;
+    redraw();
     el.setAttribute("contenteditable", "plaintext-only");
     if (el.contentEditable !== "plaintext-only") el.setAttribute("contenteditable", "true");
     el.focus();
@@ -234,10 +195,10 @@
     if (current.editable === null) el.removeAttribute("contenteditable");
     else el.setAttribute("contenteditable", current.editable);
     // textContent: what was typed, before CSS (e.g. uppercase) changes how it looks.
-    var after = el.textContent.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    var after = el.textContent.replace(/ /g, " ").replace(/\s+/g, " ").trim();
     var before = current.before.replace(/\s+/g, " ").trim();
     if (!commit || !after || after === before) {
-      el.textContent = current.before;
+      if (el.textContent !== current.before) el.textContent = current.before;
       send({ type: "text-cancel" });
       return;
     }
@@ -260,7 +221,7 @@
     "mousemove",
     function (e) {
       if (mode === "none" || editing) return;
-      var el = tagged(e.target);
+      var el = target(e.target);
       if (el !== hovered) {
         hovered = el;
         mountUi();
@@ -269,15 +230,12 @@
     },
     true,
   );
-  document.addEventListener(
-    "mouseleave",
-    function () {
-      hovered = null;
-      redraw();
-    },
-    true,
-  );
-  ["pointerdown", "mousedown", "pointerup", "mouseup", "auxclick", "submit"].forEach(function (type) {
+  // The pointer left the page (mouseleave on the root fires once, not per element).
+  document.documentElement.addEventListener("mouseleave", function () {
+    hovered = null;
+    redraw();
+  });
+  ["pointerdown", "mousedown", "pointerup", "mouseup", "dblclick", "auxclick", "submit"].forEach(function (type) {
     document.addEventListener(
       type,
       function (e) {
@@ -292,22 +250,10 @@
       if (mode === "none" || inEdit(e)) return;
       swallow(e);
       if (editing) stopEditing(true);
-      var el = tagged(e.target);
+      var el = target(e.target);
       if (!el) return;
-      if (mode === "annotate") addPin(el);
-      else select(el);
-    },
-    true,
-  );
-  document.addEventListener(
-    "dblclick",
-    function (e) {
-      if (mode !== "select" || inEdit(e)) return;
-      swallow(e);
-      var el = tagged(e.target);
-      if (!el) return;
-      if (el !== selected) select(el);
-      startEditing();
+      if (mode === "text") startEditing(el);
+      else pick(el);
     },
     true,
   );
@@ -315,7 +261,7 @@
     "keydown",
     function (e) {
       if (editing) {
-        if (e.key === "Enter") {
+        if (e.key === "Enter" && !e.isComposing) {
           swallow(e);
           stopEditing(true);
         } else if (e.key === "Escape") {
@@ -341,48 +287,10 @@
   window.addEventListener("scroll", redraw, true);
   window.addEventListener("resize", redraw);
 
-  // Drop an image file on a picture to replace it.
-  function imageUnder(e) {
-    var el = tagged(e.target);
-    return el && el.tagName === "IMG" ? el : null;
-  }
-  function hasFiles(e) {
-    return e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") !== -1;
-  }
-  document.addEventListener(
-    "dragover",
-    function (e) {
-      if (!editorOrigin || !hasFiles(e)) return;
-      var img = imageUnder(e);
-      if (!img) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-      hovered = img;
-      mountUi();
-      redraw();
-    },
-    true,
-  );
-  document.addEventListener(
-    "drop",
-    function (e) {
-      if (!editorOrigin || !hasFiles(e)) return;
-      var img = imageUnder(e);
-      if (!img) return;
-      swallow(e);
-      var file = e.dataTransfer.files[0];
-      hovered = null;
-      redraw();
-      if (file && /^image\//.test(file.type)) send({ type: "image-drop", element: describe(img), file: file });
-    },
-    true,
-  );
-
   // ---------------------------------------------------------------- page location
 
   function announcePath() {
     send({ type: "location", path: currentPath() });
-    if (selected && !selected.isConnected) deselect();
   }
   ["pushState", "replaceState"].forEach(function (name) {
     var original = history[name];
@@ -420,40 +328,52 @@
   var consoleError = console.error;
   console.error = function () {
     for (var i = 0; i < arguments.length; i++) {
-      var arg = arguments[i];
-      if (arg instanceof Error) {
-        reportError(arg.message, arg.stack, "runtime");
+      if (arguments[i] instanceof Error) {
+        reportError(arguments[i].message, arguments[i].stack, "runtime");
         break;
       }
     }
     return consoleError.apply(this, arguments);
   };
-  // Build errors show in Vite's overlay.
-  new MutationObserver(function () {
-    var overlay = document.querySelector("vite-error-overlay");
-    if (overlay && overlay.shadowRoot) {
-      var q = function (s) {
-        var n = overlay.shadowRoot.querySelector(s);
-        return n ? n.textContent.trim() : "";
-      };
-      reportError(q(".message") || "Build error", [q(".file"), q(".frame")].filter(Boolean).join("\n"), "build");
-    }
-  }).observe(document.documentElement, { childList: true, subtree: true });
   if (import.meta.hot) {
+    // Build errors (a file that doesn't compile), as Vite reports them.
+    import.meta.hot.on("vite:error", function (payload) {
+      var err = payload && payload.err;
+      if (err) reportError(err.message || "Build error", [err.id, err.frame].filter(Boolean).join("\n"), "build");
+    });
     import.meta.hot.on("vite:afterUpdate", function () {
       lastError = "";
-      send({ type: "updated", theme: themeColors() });
-      // Keep the selection on the same element after a save re-rendered it.
-      if (selected && !selected.isConnected) {
-        var loc = selected.getAttribute("data-sf-loc");
-        selected = document.querySelector('[data-sf-loc="' + CSS.escape(loc) + '"]');
-      }
-      if (selected) send({ type: "select", element: describe(selected), refresh: true });
+      send({ type: "updated" });
       redraw();
     });
   }
 
   // ---------------------------------------------------------------- messages from the editor
+
+  function handle(data) {
+    switch (data.type) {
+      case "mode":
+        if (editing) stopEditing(false);
+        mode = data.mode === "select" || data.mode === "text" ? data.mode : "none";
+        document.documentElement.style.cursor = mode === "select" ? "crosshair" : mode === "text" ? "text" : "";
+        hovered = null;
+        mountUi();
+        redraw();
+        break;
+      case "picks":
+        keepPicks(Array.isArray(data.keep) ? data.keep : []);
+        // Numbering continues after a reload (earlier picks still sit in the chat box).
+        if (typeof data.next === "number" && data.next >= nextPick) nextPick = data.next;
+        break;
+      case "viewport":
+        send({ type: "viewport", scrollX: Math.round(window.scrollX), scrollY: Math.round(window.scrollY), path: currentPath() });
+        break;
+      case "scroll":
+        // The editor's drawing layer covers the page; its wheel scrolls the page underneath.
+        if (isFinite(data.x) && isFinite(data.y)) window.scrollBy(Number(data.x), Number(data.y));
+        break;
+    }
+  }
 
   window.addEventListener("message", function (e) {
     if (e.source !== editor) return;
@@ -463,53 +383,15 @@
       editorOrigin = e.origin;
       var queued = outbox;
       outbox = [];
-      send({ type: "ready", path: currentPath(), theme: themeColors() });
+      send({ type: "ready", path: currentPath() });
       for (var i = 0; i < queued.length; i++) send(queued[i]);
       return;
     }
     if (!editorOrigin || e.origin !== editorOrigin) return;
-    switch (data.type) {
-      case "mode":
-        mode = data.mode === "select" || data.mode === "annotate" ? data.mode : "none";
-        document.documentElement.style.cursor = mode === "none" ? "" : "crosshair";
-        if (mode !== "select") deselect();
-        hovered = null;
-        mountUi();
-        redraw();
-        break;
-      case "deselect":
-        deselect();
-        break;
-      case "edit-text":
-        startEditing();
-        break;
-      case "classes":
-        if (selected) {
-          sameLoc(selected).forEach(function (el) {
-            (data.remove || []).forEach(function (c) {
-              el.classList.remove(c);
-            });
-            (data.add || []).forEach(function (c) {
-              el.classList.add(c);
-            });
-          });
-          redraw();
-        }
-        break;
-      case "pins":
-        keepPins(Array.isArray(data.keep) ? data.keep : []);
-        // Numbering continues after a reload (notes on earlier pins live in the editor).
-        if (typeof data.next === "number" && data.next >= nextPin) nextPin = data.next;
-        break;
-      case "theme":
-        var vars = data.vars || {};
-        Object.keys(vars).forEach(function (name) {
-          if (/^--[a-z0-9-]+$/.test(name)) {
-            if (vars[name]) document.documentElement.style.setProperty(name, String(vars[name]));
-            else document.documentElement.style.removeProperty(name);
-          }
-        });
-        break;
+    try {
+      handle(data);
+    } catch (error) {
+      // A bad command must never break the site itself.
     }
   });
 
